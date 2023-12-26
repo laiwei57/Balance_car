@@ -41,8 +41,8 @@ double motorSpeedFactorRight = 0.5;     // 馬達速度因子 (右)
 int ENA = 5;    // 馬達 A 使能腳
 int IN1 = 6;    // 馬達 A 控制腳 1
 int IN2 = 7;    // 馬達 A 控制腳 2
-int IN3 = 8;    // 馬達 B 控制腳 1   //9
-int IN4 = 9;    // 馬達 B 控制腳 2   //8
+int IN3 = 9;    // 馬達 B 控制腳 1   
+int IN4 = 8;    // 馬達 B 控制腳 2   
 int ENB = 10;   // 馬達 B 使能腳
 LMotorController motorController(ENA,IN1, IN2, ENB, IN3, IN4, motorSpeedFactorLeft, motorSpeedFactorRight);
 
