@@ -1,0 +1,101 @@
+#include <Wire.h>
+
+// MPU6050地址
+#define MPU6050_ADDRESS 0x68
+
+// 寄存器地址
+#define MPU6050_REG_ACCEL_XOUT_H 0x3B
+#define MPU6050_REG_GYRO_XOUT_H 0x43
+#define MPU6050_REG_PWR_MGMT_1 0x6B
+
+// 加速度和陀螺仪的偏移值
+int accelOffsetX, accelOffsetY, accelOffsetZ;
+int gyroOffsetX, gyroOffsetY, gyroOffsetZ;
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();// 初始化I2C总线
+  initializeMPU6050();// 初始化MPU6050
+  calibrateMPU6050();// 校准MPU6050
+}
+void loop() {
+  int accelData[3];
+  int gyroData[3];
+  readMPU6050Data(accelData, gyroData);// 读取MPU6050数据
+  Serial.print("Accel: X = "); Serial.print(accelData[0] - accelOffsetX);
+  Serial.print(", Y = "); Serial.print(accelData[1] - accelOffsetY);
+  Serial.print(", Z = "); Serial.println(accelData[2] - accelOffsetZ);
+  Serial.print("Gyro: X = "); Serial.print(gyroData[0] - gyroOffsetX);
+  Serial.print(", Y = "); Serial.print(gyroData[1] - gyroOffsetY);
+  Serial.print(", Z = "); Serial.println(gyroData[2] - gyroOffsetZ);
+  delay(1000);  // 刷新频率，可以根据需要调整
+}
+
+void initializeMPU6050() {
+  // 唤醒MPU6050
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(MPU6050_REG_PWR_MGMT_1);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  delay(1000);  // 等待传感器稳定
+}
+
+void readMPU6050Data(int* accelData, int* gyroData) {
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(MPU6050_REG_ACCEL_XOUT_H);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050_ADDRESS, 6, true);
+
+  accelData[0] = Wire.read() << 8 | Wire.read();
+  accelData[1] = Wire.read() << 8 | Wire.read();
+  accelData[2] = Wire.read() << 8 | Wire.read();
+
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(MPU6050_REG_GYRO_XOUT_H);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050_ADDRESS, 6, true);
+
+  gyroData[0] = Wire.read() << 8 | Wire.read();
+  gyroData[1] = Wire.read() << 8 | Wire.read();
+  gyroData[2] = Wire.read() << 8 | Wire.read();
+}
+
+void calibrateMPU6050() {
+  Serial.println("Calibrating MPU6050. Please ensure the sensor is stable...");
+
+  int numSamples = 1000;  // 采样次数
+  int accelSum[3] = {0};
+  int gyroSum[3] = {0};
+
+  for (int i = 0; i < numSamples; ++i) {
+    int accelData[3];
+    int gyroData[3];
+
+    readMPU6050Data(accelData, gyroData);
+
+    for (int j = 0; j < 3; ++j) {
+      accelSum[j] += accelData[j];
+      gyroSum[j] += gyroData[j];
+    }
+
+    delay(5);  // 等待5毫秒，可以调整这个值
+  }
+
+  accelOffsetX = accelSum[0] / numSamples;
+  accelOffsetY = accelSum[1] / numSamples;
+  accelOffsetZ = accelSum[2] / numSamples;
+
+  gyroOffsetX = gyroSum[0] / numSamples;
+  gyroOffsetY = gyroSum[1] / numSamples;
+  gyroOffsetZ = gyroSum[2] / numSamples;
+
+  Serial.println("Calibration complete.");
+  Serial.print("Accel Offset: X = "); Serial.print(accelOffsetX);
+  Serial.print(", Y = "); Serial.print(accelOffsetY);
+  Serial.print(", Z = "); Serial.println(accelOffsetZ);
+
+  Serial.print("Gyro Offset: X = "); Serial.print(gyroOffsetX);
+  Serial.print(", Y = "); Serial.print(gyroOffsetY);
+  Serial.print(", Z = "); Serial.println(gyroOffsetZ);
+}
