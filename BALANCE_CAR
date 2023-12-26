@@ -1,0 +1,135 @@
+#include <PID_v1.h>
+#include <LMotorController.h>
+#include "I2Cdev.h"
+#include "MPU6050_6Axis_MotionApps20.h"
+
+#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+#include "Wire.h"
+#endif
+#define MIN_ABS_SPEED 20 // 最小絕對速度
+
+MPU6050 mpu;
+// MPU 控制/狀態變數
+bool dmpReady = false;      // 若 DMP 初始化成功，則設為 true
+uint8_t mpuIntStatus;        // 保存來自 MPU 的實際中斷狀態位元組
+uint8_t devStatus;           // 每次設備操作後的回傳狀態 (0 = 成功, 非 0 = 錯誤)
+uint16_t packetSize;         // 預期 DMP 封包大小 (預設為 42 位元組)
+uint16_t fifoCount;          // FIFO 中當前的位元組數量
+uint8_t fifoBuffer[64];      // FIFO 儲存緩衝區
+
+// 方向/運動變數
+Quaternion q;                // [w, x, y, z] 四元數容器
+VectorFloat gravity;         // [x, y, z] 重力向量
+float ypr[3];                // [yaw, pitch, roll] 偏航/俯仰/翻滾容器和重力向量
+
+// PID 控制
+double originalSetpoint = 178;          // 原始目標設定值
+double setpoint = originalSetpoint;     // 目標設定值
+double movingAngleOffset = 0.1;         // 移動的角度偏移
+double input, output;                   // 輸入和輸出
+
+// 調整這些值以適應您的設計
+double Kp = 59;     // 比例增益，控制實際輸出與目標輸出的線性關係
+double Kd = 1.3;    // 微分增益，抑制系統振盪，提高穩定性
+double Ki = 250;    // 積分增益，通過累積過去的誤差來抑制系統的穩態誤差
+
+PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+double motorSpeedFactorLeft = 0.6;      // 馬達速度因子 (左)
+double motorSpeedFactorRight = 0.5;     // 馬達速度因子 (右)
+
+// 馬達控制器
+int ENA = 5;    // 馬達 A 使能腳
+int IN1 = 6;    // 馬達 A 控制腳 1
+int IN2 = 7;    // 馬達 A 控制腳 2
+int IN3 = 8;    // 馬達 B 控制腳 1   //9
+int IN4 = 9;    // 馬達 B 控制腳 2   //8
+int ENB = 10;   // 馬達 B 使能腳
+LMotorController motorController(ENA,IN1, IN2, ENB, IN3, IN4, motorSpeedFactorLeft, motorSpeedFactorRight);
+
+volatile bool mpuInterrupt = false;     // 指示 MPU 中斷引腳是否變為高電位
+void dmpDataReady()
+{
+  mpuInterrupt = true;
+}
+
+void setup()
+{
+  // 加入 I2C bus (I2Cdev library 不會自動執行這個)
+  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+  Wire.begin();
+  TWBR = 24; // 400kHz I2C clock (如果 CPU 是 8MHz，則為 200kHz)
+  #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+  Fastwire::setup(400, true);
+  #endif
+
+  mpu.initialize();
+
+  devStatus = mpu.dmpInitialize();
+
+  // 提供自己的陀螺儀偏移，縮放至最小靈敏度
+  mpu.setXGyroOffset(0); //0
+  mpu.setYGyroOffset(65); 
+  mpu.setZGyroOffset(66); 
+  mpu.setZAccelOffset(18625);
+
+  // 確保初始化成功 (如果成功會返回 0)
+  if (devStatus == 0)
+  {
+    // 打開 DMP，現在它已經準備好了
+    mpu.setDMPEnabled(true);
+    // 啟用 Arduino 中斷偵測
+    attachInterrupt(0, dmpDataReady, RISING);
+    mpuIntStatus = mpu.getIntStatus();
+    // 設定 DMP 就緒旗標以便主迴圈()知道可以使用它
+    dmpReady = true;
+    // 獲取預期的 DMP 封包大小以供稍後比較
+    packetSize = mpu.dmpGetFIFOPacketSize();
+    // 設定 PID
+    pid.SetMode(AUTOMATIC);
+    pid.SetSampleTime(10);
+    pid.SetOutputLimits(-255, 255);
+  }
+  else
+  {
+    // 錯誤!
+    // 1 = 初始記憶體載入失敗
+    // 2 = DMP 配置更新失敗
+    // (通常代碼為 1，如果它會出問題)
+    Serial.print(F("DMP Initialization failed (code "));
+    Serial.print(devStatus);
+    Serial.println(F(")"));
+  }
+}
+
+void loop()
+{
+  if (!dmpReady) return;// 如果初始化失敗，不要嘗試進行任何操作
+  while (!mpuInterrupt && fifoCount < packetSize)// 等待 MPU 中斷或額外的封包可用
+  { 
+    pid.Compute();//執行 PID 計算並輸出到馬達
+    motorController.move(output, MIN_ABS_SPEED);
+  }
+  mpuInterrupt = false;
+  mpuIntStatus = mpu.getIntStatus();
+  // 獲取當前的 FIFO 數量
+  fifoCount = mpu.getFIFOCount();
+  if ((mpuIntStatus & 0x10) || fifoCount == 1024)
+  {
+    // 重置以便繼續進行
+    mpu.resetFIFO();
+    Serial.println(F("FIFO overflow!"));
+  }
+  else if (mpuIntStatus & 0x02)
+  {
+    // 等待正確的可用數據長度
+    while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
+    // 從 FIFO 讀取封包
+    mpu.getFIFOBytes(fifoBuffer, packetSize);
+    // 在這裡跟踪 FIFO 數量，以防有 > 1 封包可用
+    fifoCount -= packetSize;
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    mpu.dmpGetGravity(&gravity, &q);
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+    input = ypr[1] * 180/M_PI + 180;
+  }
+}
